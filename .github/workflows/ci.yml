@@ -32,7 +32,7 @@ jobs:
 
       - name: Run isort
         run: |
-          isort --check-only .
+          isort --profile black --check-only .
 
       - name: Run Flake8
         run: |
