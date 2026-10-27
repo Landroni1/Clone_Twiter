@@ -4,13 +4,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.dependencies import get_current_user
 from src.database import get_db
 from src.models import User
-from src.schemas import (
-    BaseResponse,
-    TweetCreate,
-    TweetCreateResponse,
-    TweetFeedResponse,
-    TweetOut,
-)
+from src.schemas import (BaseResponse, TweetCreate, TweetCreateResponse,
+                         TweetFeedResponse, TweetOut)
 from src.services import TweetService
 
 router = APIRouter(prefix="/api/tweets", tags=["Tweets"])
