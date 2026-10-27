@@ -32,7 +32,7 @@ async def upload_media(
     :param db:
     :return media_id:
     """
-    if file.content_type and file.content_type.startswith("image/"):
+    if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
