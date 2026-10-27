@@ -1,0 +1,132 @@
+twitter_clone/
+├── .env.example              # Пример переменных окружения
+├── .gitignore
+├── Dockerfile                # Сборка контейнера бэкенда
+├── docker-compose.yml        # Оркестрация: app, postgres, nginx/frontend
+├── pyproject.toml / requirements.txt
+├── README.md                 # Инструкция по запуску, swagger, архитектура
+│
+├── static/                   # Папка для загруженных медиа (tweet images)
+│   └── uploads/
+│
+├── frontend/                 # Статика фронтенда из ТЗ (dist/)
+│   ├── index.html
+│   ├── css/
+│   └── js/
+│
+├── nginx/                    # (Опционально) Конфиг Nginx для раздачи фронта и проксирования API
+│   └── nginx.conf
+│
+├── src/                      # Исходный код приложения
+│   ├── __init__.py
+│   ├── main.py               # Точка входа (создание app, подключение роутов, CORS, swagger)
+│   ├── config.py             # Настройки (pydantic-settings / dynaconf / os.environ)
+│   ├── database.py           # Инициализация engine, sessionmaker, Base
+│   │
+│   ├── models/               # SQLAlchemy модели (таблицы БД)
+│   │   ├── __init__.py
+│   │   ├── user.py           # User, Followers (M2M)
+│   │   ├── tweet.py          # Tweet, TweetLike (M2M)
+│   │   └── media.py          # Media (id, file_path, tweet_id)
+│   │
+│   ├── schemas/              # Pydantic (или Marshmallow) схемы валидации и сериализации
+│   │   ├── __init__.py
+│   │   ├── common.py         # ResponseSuccess, ResponseError ({result, error_type, error_message})
+│   │   ├── tweet.py          # TweetIn, TweetOut, TweetFeedOut
+│   │   ├── user.py           # UserProfileOut, FollowerSchema
+│   │   └── media.py          # MediaUploadOut
+│   │
+│   ├── api/                  # Контроллеры / Эндпоинты
+│   │   ├── __init__.py
+│   │   ├── dependencies.py   # Получение текущего пользователя по header `api-key`
+│   │   ├── tweets.py         # POST /tweets, GET /tweets, DELETE /tweets/{id}, likes
+│   │   ├── users.py          # GET /users/me, GET /users/{id}, follow/unfollow
+│   │   └── medias.py         # POST /medias (загрузка файлов)
+│   │
+│   ├── services/             # Бизнес-логика (отделена от роутов)
+│   │   ├── __init__.py
+│   │   ├── tweet_service.py  # Сборка ленты, ранжирование, создание, удаление
+│   │   ├── user_service.py   # Управление подписками, получение профилей
+│   │   └── media_service.py  # Сохранение файлов на диск / в хранилище
+│   │
+│   └── utils/
+│       ├── __init__.py
+│       └── seeder.py         # Наполнение БД тестовыми пользователями и твитами при старте
+│
+└── tests/                    # Unit и интеграционные тесты (pytest)
+    ├── __init__.py
+    ├── conftest.py           # Фикстуры: тестовый клиент, тестовая база данных
+    ├── test_tweets.py
+    ├── test_users.py
+    └── test_medias.py
+
+
+File "/app/src/utils/seeder.py", line 23, in seed_initial_data
+  user_1.following.append(user_2)
+...
+sqlalchemy.exc.MissingGreenlet: greenlet_spawn has not been called; can't call await_() here. Was IO attempted in an unexpected place?
+```[cite: 10]
+
+---
+
+### Почему это происходит
+
+В асинхронном режиме (`asyncpg`) SQLAlchemy **запрещает неявный ленивый запрос (lazy load) в базу данных без `await`**.
+
+Когда вы пишете `user_1.following.append(user_2)`[cite: 10]:
+1. Python сначала пытается прочитать список `user_1.following`.
+2. Так как этот список ещё не был загружен из базы, SQLAlchemy пытается выполнить синхронный скрытый SQL-запрос `SELECT`, чтобы достать текущих подписчиков.
+3. В асинхронном коде синхронный запрос «на лету» блокирует event loop и немедленно выбрасывает `MissingGreenlet`[cite: 10].
+
+Кроме того, создавать связь многие-ко-многим через `Follower` правильнее и безопаснее напрямую через саму промежуточную модель `Follower`, так как у вас для неё объявлен явный класс `Follower(follower_id=..., followed_id=...)`[cite: 2].
+
+---
+
+### Как исправить
+
+Откройте файл **`src/utils/seeder.py`** и замените строки с `.following.append(...)` на прямое создание записей модели `Follower`[cite: 2].
+
+#### Исправленный `src/utils/seeder.py`:
+
+```python
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.models import User, Tweet, Follower
+
+
+async def seed_initial_data(db: AsyncSession) -> None:
+    """
+    Заполняет базу данных демонстрационными пользователями, твитами и подписками,
+    если база пуста.
+    """
+    stmt = select(User).where(User.api_key == "test")
+    result = await db.execute(stmt)
+    if result.scalar_one_or_none():
+        return
+
+    # 1. Создаем пользователей
+    user_1 = User(name="Andrei Zaharov", api_key="test")
+    user_2 = User(name="Vasya Smith", api_key="vasya_key")
+    user_3 = User(name="Misha Kurt", api_key="misha_key")
+
+    db.add_all([user_1, user_2, user_3])
+    await db.flush()  # Получаем сгенерированные id пользователей
+
+    # 2. Создаем связи подписок напрямую через модель Follower (без lazy-load обращения к .following)
+    follow_1 = Follower(follower_id=user_1.id, followed_id=user_2.id)
+    follow_2 = Follower(follower_id=user_1.id, followed_id=user_3.id)
+    follow_3 = Follower(follower_id=user_2.id, followed_id=user_1.id)
+
+    # 3. Создаем демонстрационные твиты
+    tweet_1 = Tweet(
+        content="Всем привет! Добро пожаловать в корпоративный микроблог!",
+        author_id=user_2.id,
+    )
+    tweet_2 = Tweet(
+        content="Python и FastAPI лучшие 🚀",
+        author_id=user_3.id,
+    )
+
+    db.add_all([follow_1, follow_2, follow_3, tweet_1, tweet_2])
+    await db.commit()

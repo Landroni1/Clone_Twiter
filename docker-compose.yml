@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: twitter_db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_password
+      POSTGRES_DB: database
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    container_name: twitter_app
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_USER: postgres
+      DB_PASSWORD: postgres_password
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: database
+      DB_ECHO: "False"
+    volumes:
+      - ./static/uploads:/app/static/uploads
+    # Порт 8000 наружу выставлять не нужно, к нему будет обращаться только Nginx по внутренней сети
+
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: twitter_nginx
+    restart: always
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./dist:/var/www/dist:ro
+      - ./static/uploads:/var/www/static/uploads:ro
+
+volumes:
+  postgres_data:
