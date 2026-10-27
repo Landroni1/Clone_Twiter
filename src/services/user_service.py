@@ -6,6 +6,7 @@ from sqlalchemy.orm import selectinload
 from src.models import Follower, User
 
 
+
 class UserService:
     """
     Сервис управления пользователями и связями подписок
